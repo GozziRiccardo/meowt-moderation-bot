@@ -1,156 +1,125 @@
-import { ethers } from "ethers";
-import ABI from "./abi/BillboardGame.json";
-import { CONFIG } from "./config";
+// src/moderate.ts
+/* Multi-provider moderation: Perspective (Jigsaw) + OpenAI fallback */
 
-// ---- ENV ----
-const GAME_ADDRESS = env("GAME_ADDRESS");
-const RPC_URL = env("RPC_URL");
-const BOT_PRIVATE_KEY = env("BOT_PRIVATE_KEY");
-const PERSPECTIVE_API_KEY = env("PERSPECTIVE_API_KEY");
+type ModResult = {
+  flagged: boolean;
+  reasons: string[];
+  provider: "perspective" | "openai" | "none";
+};
 
-function env(name: string): string {
-  const v = process.env[name];
-  if (!v || !v.trim()) {
-    throw new Error(`Missing required env: ${name}`);
-  }
-  return v.trim();
-}
+const PERSPECTIVE_API_KEY = process.env.PERSPECTIVE_API_KEY || "";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const ORDER = (process.env.MOD_PROVIDER_ORDER || "perspective,openai")
+  .split(",")
+  .map(s => s.trim().toLowerCase())
+  .filter(Boolean) as Array<"perspective" | "openai">;
 
-// ---- Ethers setup ----
-const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = new ethers.Wallet(BOT_PRIVATE_KEY, provider);
-const game = new ethers.Contract(GAME_ADDRESS, ABI, wallet);
+// Tunables
+const PERSPECTIVE_THRESHOLD = Number(process.env.PERSPECTIVE_THRESHOLD || "0.83"); // toxicity
+const PERSPECTIVE_SEVERE_THRESHOLD = Number(process.env.PERSPECTIVE_SEVERE_THRESHOLD || "0.50");
+const OPENAI_MODEL = process.env.OPENAI_MOD_MODEL || "omni-moderation-latest";
 
-// ---- Helpers ----
-async function resolveTextFromUri(uri: string): Promise<string | null> {
-  try {
-    if (uri.startsWith("meow:text:")) {
-      const raw = uri.slice("meow:text:".length);
-      // allow both plain and URI-encoded
-      try { return decodeURIComponent(raw); } catch { return raw; }
-    }
-    if (uri.startsWith("data:text/plain;base64,")) {
-      const b64 = uri.slice("data:text/plain;base64,".length);
-      const bin = Buffer.from(b64, "base64");
-      return bin.toString("utf8").slice(0, CONFIG.maxBytesToFetch);
-    }
-    if (uri.startsWith("ipfs://")) {
-      const cid = uri.replace("ipfs://", "");
-      const url = CONFIG.ipfsGateway.replace(/\/+$/, "") + "/" + cid;
-      return await fetchText(url);
-    }
-    if (uri.startsWith("http://") || uri.startsWith("https://")) {
-      return await fetchText(uri);
-    }
-    // Unknown scheme -> skip
-    return null;
-  } catch (e) {
-    console.error("resolveTextFromUri error:", e);
-    return null;
-  }
-}
+// ---- Providers ----
+async function analyzeWithPerspective(text: string): Promise<ModResult> {
+  if (!PERSPECTIVE_API_KEY) return { flagged: false, reasons: ["no key"], provider: "perspective" };
 
-async function fetchText(url: string): Promise<string | null> {
-  const res = await fetch(url, { method: "GET" });
-  if (!res.ok) return null;
-  const ct = (res.headers.get("content-type") || "").toLowerCase();
-  if (!ct.includes("text") && !ct.includes("json")) return null;
-  const buf = Buffer.from(await res.arrayBuffer());
-  return buf.slice(0, CONFIG.maxBytesToFetch).toString("utf8");
-}
-
-type PerspectiveScores = Record<string, number>;
-
-async function analyzeWithPerspective(text: string): Promise<PerspectiveScores> {
-  // Build attributes list from thresholds keys
-  const requestedAttributes = Object.fromEntries(
-    Object.keys(CONFIG.thresholds).map(k => [k, {}])
-  );
-
+  const url = `https://commentanalyzer.googleapis.com/v1alpha1/comments:analyze?key=${PERSPECTIVE_API_KEY}`;
   const body = {
     comment: { text },
-    requestedAttributes,
-    doNotStore: true,
-    languages: ["en"] // Perspective can auto-detect, but pin to en for stability; add more if needed.
+    languages: ["en"],
+    requestedAttributes: {
+      TOXICITY: {},
+      SEVERE_TOXICITY: {},
+      THREAT: {},
+      INSULT: {},
+      PROFANITY: {},
+      SEXUALLY_EXPLICIT: {},
+      IDENTITY_ATTACK: {},
+    },
   };
 
-  const url = `https://commentanalyzer.googleapis.com/v1alpha1/comments:analyze?key=${encodeURIComponent(PERSPECTIVE_API_KEY)}`;
   const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    return { flagged: false, reasons: [`perspective http ${res.status}: ${t}`], provider: "perspective" };
+  }
+  const json = await res.json();
+
+  function score(attr: string): number {
+    return json?.attributeScores?.[attr]?.summaryScore?.value ?? 0;
+  }
+
+  const reasons: string[] = [];
+  const tox = score("TOXICITY");
+  const sev = score("SEVERE_TOXICITY");
+  const threat = score("THREAT");
+  const insult = score("INSULT");
+  const profanity = score("PROFANITY");
+  const sexual = score("SEXUALLY_EXPLICIT");
+  const ident = score("IDENTITY_ATTACK");
+
+  if (sev >= PERSPECTIVE_SEVERE_THRESHOLD) reasons.push(`SEVERE_TOXICITY=${sev.toFixed(2)}`);
+  if (tox >= PERSPECTIVE_THRESHOLD) reasons.push(`TOXICITY=${tox.toFixed(2)}`);
+  if (threat >= 0.80) reasons.push(`THREAT=${threat.toFixed(2)}`);
+  if (insult >= 0.90) reasons.push(`INSULT=${insult.toFixed(2)}`);
+  if (profanity >= 0.95) reasons.push(`PROFANITY=${profanity.toFixed(2)}`);
+  if (sexual >= 0.90) reasons.push(`SEXUALLY_EXPLICIT=${sexual.toFixed(2)}`);
+  if (ident >= 0.80) reasons.push(`IDENTITY_ATTACK=${ident.toFixed(2)}`);
+
+  return { flagged: reasons.length > 0, reasons, provider: "perspective" };
+}
+
+async function analyzeWithOpenAI(text: string): Promise<ModResult> {
+  if (!OPENAI_API_KEY) return { flagged: false, reasons: ["no key"], provider: "openai" };
+
+  const res = await fetch("https://api.openai.com/v1/moderations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({ model: OPENAI_MODEL, input: text }),
   });
   if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Perspective API error: ${res.status} ${t}`);
+    const t = await res.text().catch(() => "");
+    return { flagged: false, reasons: [`openai http ${res.status}: ${t}`], provider: "openai" };
   }
-  const data = await res.json();
+  const json = await res.json();
+  const r = json?.results?.[0];
+  if (!r) return { flagged: false, reasons: ["openai: empty"], provider: "openai" };
 
-  const scores: PerspectiveScores = {};
-  for (const [k, v] of Object.entries<any>(data.attributeScores || {})) {
-    const sum = (v.summaryScore && typeof v.summaryScore.value === "number")
-      ? v.summaryScore.value : 0;
-    scores[k] = sum;
-  }
-  return scores;
+  const flagged: boolean = !!r.flagged;
+  const cats = r.categories ?? {};
+  const reasons = Object.keys(cats)
+    .filter(k => cats[k])
+    .map(k => `OPENAI:${k}`);
+
+  return { flagged, reasons, provider: "openai" };
 }
 
-function shouldFlag(scores: PerspectiveScores): { flag: boolean; reasons: string[] } {
-  const reasons: string[] = [];
-  for (const [attr, threshold] of Object.entries(CONFIG.thresholds)) {
-    const val = scores[attr] ?? 0;
-    if (val >= threshold) reasons.push(`${attr}=${val.toFixed(2)}≥${threshold}`);
-  }
-  return { flag: reasons.length > 0, reasons };
-}
-
-// ---- Main ----
-(async () => {
-  console.log(`[bot] address: ${wallet.address}`);
-  const signer = await game.moderationSigner();
-  if (signer.toLowerCase() !== wallet.address.toLowerCase()) {
-    console.warn(`[warn] Contract moderationSigner is ${signer}, NOT this wallet. Set it with setModeration(...). Exiting.`);
-    return;
-  }
-
-  const id: bigint = await game.activeMessageId();
-  console.log(`[info] activeMessageId: ${id}`);
-  if (id === 0n) return;
-
-  const flaggedOnChain: boolean = await game.modFlagged(id);
-  if (flaggedOnChain) { console.log(`[info] already flagged. exit.`); return; }
-
-  const m = await game.messages(id);
-  const uri: string = m.uri;
-  console.log(`[info] uri: ${uri}`);
-
-  const text = await resolveTextFromUri(uri);
-  if (!text || !text.trim()) {
-    console.log(`[info] no text resolved; skipping`);
-    return;
-  }
-
-  console.log(`[info] analyzing ${Math.min(text.length, 120)} chars:\n"${text.slice(0, 120)}${text.length>120?"…":""}"`);
-  const scores = await analyzeWithPerspective(text);
-  console.log(`[info] scores:`, scores);
-
-  const { flag, reasons } = shouldFlag(scores);
-  if (!flag) {
-    console.log(`[info] OK — below thresholds.`);
-    return;
-  }
-
-  console.log(`[moderation] Thresholds exceeded: ${reasons.join(", ")}`);
-  if (CONFIG.dryRun) {
-    console.log(`[dry-run] Would call setModerationFlag(${id}, true)`);
-    return;
+// ---- Orchestrator ----
+export async function moderateText(text: string): Promise<ModResult> {
+  for (const p of ORDER) {
+    try {
+      if (p === "perspective") {
+        const r = await analyzeWithPerspective(text);
+        // If Perspective is unavailable (no key / http error), fall through to next.
+        if (r.reasons.includes("no key") || r.reasons[0]?.startsWith("perspective http")) continue;
+        return r;
+      }
+      if (p === "openai") {
+        const r = await analyzeWithOpenAI(text);
+        if (r.reasons.includes("no key") || r.reasons[0]?.startsWith("openai http")) continue;
+        return r;
+      }
+    } catch (e: any) {
+      // swallow and try next provider
     }
-
-  const tx = await game.setModerationFlag(id, true);
-  console.log(`[tx] sent: ${tx.hash}`);
-  const rc = await tx.wait(1);
-  console.log(`[tx] confirmed in block ${rc.blockNumber}`);
-})().catch(err => {
-  console.error(`[fatal]`, err);
-  process.exit(1);
-});
+  }
+  return { flagged: false, reasons: ["no provider configured"], provider: "none" };
+}
