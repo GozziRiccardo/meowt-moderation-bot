@@ -1,0 +1,53 @@
+[
+  {
+    "inputs": [],
+    "name": "activeMessageId",
+    "outputs": [{"internalType":"uint256","name":"","type":"uint256"}],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs":[{"internalType":"uint256","name":"","type":"uint256"}],
+    "name":"messages",
+    "outputs":[
+      {"internalType":"uint256","name":"id","type":"uint256"},
+      {"internalType":"address","name":"author","type":"address"},
+      {"internalType":"uint256","name":"stake","type":"uint256"},
+      {"internalType":"uint256","name":"startTime","type":"uint256"},
+      {"internalType":"uint256","name":"B0","type":"uint256"},
+      {"internalType":"string","name":"uri","type":"string"},
+      {"internalType":"bytes32","name":"contentHash","type":"bytes32"},
+      {"internalType":"uint256","name":"likes","type":"uint256"},
+      {"internalType":"uint256","name":"dislikes","type":"uint256"},
+      {"internalType":"uint256","name":"feePot","type":"uint256"},
+      {"internalType":"bool","name":"resolved","type":"bool"},
+      {"internalType":"bool","name":"nuked","type":"bool"},
+      {"internalType":"uint8","name":"winnerSide","type":"uint8"},
+      {"internalType":"uint256","name":"sharePerVote","type":"uint256"},
+      {"internalType":"uint256","name":"seedFromStake","type":"uint256"}
+    ],
+    "stateMutability":"view",
+    "type":"function"
+  },
+  {
+    "inputs":[{"internalType":"uint256","name":"id","type":"uint256"}],
+    "name":"modFlagged",
+    "outputs":[{"internalType":"bool","name":"","type":"bool"}],
+    "stateMutability":"view",
+    "type":"function"
+  },
+  {
+    "inputs":[{"internalType":"uint256","name":"id","type":"uint256"},{"internalType":"bool","name":"flagged_","type":"bool"}],
+    "name":"setModerationFlag",
+    "outputs":[],
+    "stateMutability":"nonpayable",
+    "type":"function"
+  },
+  {
+    "inputs": [],
+    "name": "moderationSigner",
+    "outputs": [{"internalType":"address","name":"","type":"address"}],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]
