@@ -1,0 +1,61 @@
+name: HMOT Keeper
+
+on:
+  schedule:
+    # Every 5 minutes (00,05,10,15,... UTC)
+    - cron: "*/5 * * * *"
+    # Staggered: 02,07,12,17,... UTC  → ~every 2–3 minutes overall
+    - cron: "2-59/5 * * * *"
+  # Manual run button in the UI
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hmot-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # ---- required (set these in repo Settings → Secrets and variables) ----
+      RPC_URL: ${{ secrets.RPC_URL }}                  # e.g. Alchemy/Infura HTTPS URL
+      PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}          # bot wallet PK (no 0x prefix or with, your script should handle either)
+      CONTRACT_ADDRESS: ${{ vars.CONTRACT_ADDRESS }}   # 0x...
+      CHAIN_ID: ${{ vars.CHAIN_ID }}                   # e.g. 84532 for Base Sepolia
+      # ---- optional moderation API creds (if your script uses them) ----
+      MOD_API_URL: ${{ vars.MOD_API_URL }}
+      MOD_API_KEY: ${{ secrets.MOD_API_KEY }}
+      # Throttle between on-chain txs (ms). Safe default.
+      RATE_LIMIT_MS: ${{ vars.RATE_LIMIT_MS }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # If you're using TypeScript and build step, keep this.
+      # If you run with tsx/ts-node directly, you can remove it.
+      - name: Build
+        run: npm run build --if-present
+
+      # Adjust the entrypoint to your script:
+      #  - "node dist/keeper.js" if you build
+      #  - "npx tsx src/keeper.ts" if you don't
+      - name: Run keeper
+        run: |
+          if [ -f dist/keeper.js ]; then
+            node dist/keeper.js
+          else
+            npx tsx src/keeper.ts
+          fi
