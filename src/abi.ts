@@ -1,5 +1,4 @@
 // src/abi.ts
-// Minimal ABI the keeper needs
 export const GAME_ABI = [
   {
     type: "function",
@@ -31,6 +30,14 @@ export const GAME_ABI = [
       { internalType: "uint256", name: "seedFromStake", type: "uint256" },
     ],
   },
+  // ✅ add this getter for the public mapping
+  {
+    type: "function",
+    name: "modFlagged",
+    stateMutability: "view",
+    inputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    outputs: [{ internalType: "bool", name: "", type: "bool" }],
+  },
   {
     type: "function",
     name: "setModerationFlag",
@@ -43,5 +50,4 @@ export const GAME_ABI = [
   },
 ] as const;
 
-// Also provide a default export so either import style works
 export default GAME_ABI;
