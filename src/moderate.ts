@@ -14,7 +14,7 @@ const OPENAI_MODEL = process.env.OPENAI_MOD_MODEL || "omni-moderation-latest";
 // Provider order (comma-separated env: "perspective,openai" or "openai,perspective")
 const ORDER = (process.env.MOD_PROVIDER_ORDER || "perspective,openai")
   .split(",")
-  .map(s => s.trim().toLowerCase())
+  .map((s: string) => s.trim().toLowerCase())
   .filter(Boolean) as Array<"perspective" | "openai">;
 
 // Tunables for Perspective
