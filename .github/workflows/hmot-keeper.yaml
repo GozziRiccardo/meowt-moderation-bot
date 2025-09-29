@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: hmot-sweep
-  cancel-in-progress: false
+  cancel-in-progress: true  # cancel any still-running previous sweep
 
 jobs:
   sweep:
@@ -36,7 +36,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # ⛔ no "cache: npm" here
 
       - name: Install dependencies
         run: |
@@ -46,14 +45,13 @@ jobs:
             npm i
           fi
 
-      - name: Build
+      - name: Build (if present)
         run: npm run build --if-present
 
       - name: Run keeper
-  run: |
-    if [ -f dist/keeper.js ]; then
-      node dist/keeper.js
-    else
-      npx tsx src/keeper.ts
-    fi
-
+        run: |
+          if [ -f dist/keeper.js ]; then
+            node dist/keeper.js
+          else
+            npx tsx src/keeper.ts
+          fi
