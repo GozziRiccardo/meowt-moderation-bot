@@ -19,17 +19,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # ---- required ----
       RPC_URL: ${{ secrets.RPC_URL }}
       PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
       CONTRACT_ADDRESS: ${{ secrets.GAME_ADDRESS }}
-      CHAIN_ID: ${{ vars.CHAIN_ID }}              # e.g., 84532 for Base Sepolia
-
-      # ---- moderation providers (optional/fallbacks) ----
-      PERSPECTIVE_API_KEY: ${{ secrets.PERSPECTIVE_API_KEY }}
+      CHAIN_ID: ${{ vars.CHAIN_ID }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-
-      # optional throttle (ms) between txs
+      PERSPECTIVE_API_KEY: ${{ secrets.PERSPECTIVE_API_KEY }}
+      MOD_API_URL: ${{ vars.MOD_API_URL }}
+      MOD_API_KEY: ${{ secrets.MOD_API_KEY }}
       RATE_LIMIT_MS: ${{ vars.RATE_LIMIT_MS }}
     steps:
       - name: Checkout
@@ -39,7 +36,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+          # ⛔ no "cache: npm" here
 
       - name: Install dependencies
         run: |
