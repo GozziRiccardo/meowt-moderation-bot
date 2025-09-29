@@ -1,3 +1,4 @@
+// src/keeper.ts
 import { ethers } from "ethers";
 import { GAME_ABI } from "./abi.js";
 import { CONFIG } from "./config.js";
@@ -28,9 +29,9 @@ async function fetchTextFromUri(uri: string): Promise<string | null> {
     if (!res.ok) return null;
 
     const ct = res.headers.get("content-type") || "";
-    // Only moderate text-y content
+    // Only moderate text-y content (but still read if gateways are sloppy)
     if (!/text\/plain|text\/html|application\/json/i.test(ct)) {
-      // still try to read; many gateways serve without perfect content-type
+      // continue
     }
     const text = await res.text();
     return (text || "").slice(0, 10000);
@@ -48,7 +49,7 @@ async function fetchMeowTextByHash(hashHex: string): Promise<string | null> {
       headers: CONFIG.modApiKey ? { Authorization: `Bearer ${CONFIG.modApiKey}` } : undefined
     });
     if (!res.ok) return null;
-    const json = await res.json().catch(() => null) as any;
+    const json = (await res.json().catch(() => null)) as any;
     const text = (json?.text ?? "") as string;
     return (text || "").slice(0, 10000) || null;
   } catch {
@@ -64,6 +65,30 @@ async function resolveMessageText(uri: string, contentHash: string): Promise<str
     return await fetchTextFromUri(uri);
   }
   return null;
+}
+
+/**
+ * Read modFlagged(id) even if your main ABI doesn't include it.
+ * Falls back to a raw provider.call with a minimal Interface.
+ */
+async function readModFlagged(
+  game: ethers.Contract,
+  provider: ethers.JsonRpcProvider,
+  id: bigint
+): Promise<boolean> {
+  // If ABI already has it, great—use it.
+  if (typeof (game as any).modFlagged === "function") {
+    const v: boolean = await (game as any).modFlagged(id);
+    return !!v;
+  }
+  // Raw call using a tiny ABI just for this getter
+  const iface = new ethers.Interface([
+    "function modFlagged(uint256) view returns (bool)"
+  ]);
+  const data = iface.encodeFunctionData("modFlagged", [id]);
+  const ret = await provider.call({ to: CONFIG.gameAddress as `0x${string}`, data });
+  const [flag] = iface.decodeFunctionResult("modFlagged", ret);
+  return !!flag;
 }
 
 async function main() {
@@ -83,8 +108,8 @@ async function main() {
     return;
   }
 
-  // If already flagged, assume your patched contract auto-nuked on flag.
-  const alreadyFlagged: boolean = await game.modFlagged(activeId);
+  // If already flagged, assume contract auto-nuked on flag (your latest patch)
+  const alreadyFlagged: boolean = await readModFlagged(game, provider, activeId);
   if (alreadyFlagged) {
     console.log(`Message ${activeId} already mod-flagged.`);
     return;
