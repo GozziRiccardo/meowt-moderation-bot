@@ -43,16 +43,3 @@ jobs:
           else
             npm i
           fi
-
-      # If you aren’t compiling to dist, you can drop this step
-      - name: Build
-        run: npm run build --if-present
-
-      - name: Run keeper
-        run: |
-          if [ -f dist/keeper.js ]; then
-            node dist/keeper.js
-          else
-            # You said your file is moderate.ts; run that directly
-            npx tsx src/moderate.ts
-          fi
