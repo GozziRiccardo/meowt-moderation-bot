@@ -1,4 +1,3 @@
-// src/keeper.ts
 import { ethers } from "ethers";
 import { GAME_ABI } from "./abi.js";
 import { CONFIG } from "./config.js";
@@ -11,7 +10,6 @@ const isIpfs = (u: string) => u.startsWith("ipfs://");
 const isMeowText = (u: string) => u.startsWith("meow:text:");
 
 function ipfsToHttp(u: string): string {
-  // ipfs://CID/path → https://ipfs.io/ipfs/CID/path
   const rest = u.replace("ipfs://", "");
   return `https://ipfs.io/ipfs/${rest}`;
 }
@@ -29,9 +27,8 @@ async function fetchTextFromUri(uri: string): Promise<string | null> {
     if (!res.ok) return null;
 
     const ct = res.headers.get("content-type") || "";
-    // Only moderate text-y content (but still read if gateways are sloppy)
     if (!/text\/plain|text\/html|application\/json/i.test(ct)) {
-      // continue
+      // gateways can be sloppy; still try to read it
     }
     const text = await res.text();
     return (text || "").slice(0, 10000);
@@ -41,7 +38,6 @@ async function fetchTextFromUri(uri: string): Promise<string | null> {
 }
 
 async function fetchMeowTextByHash(hashHex: string): Promise<string | null> {
-  // If your UI exposes an endpoint to map contentHash->text, set MOD_API_URL/MOD_API_KEY
   if (!CONFIG.modApiUrl) return null;
   try {
     const url = `${CONFIG.modApiUrl.replace(/\/$/, "")}/content?hash=${encodeURIComponent(hashHex)}`;
@@ -58,41 +54,20 @@ async function fetchMeowTextByHash(hashHex: string): Promise<string | null> {
 }
 
 async function resolveMessageText(uri: string, contentHash: string): Promise<string | null> {
-  if (isMeowText(uri)) {
-    return await fetchMeowTextByHash(contentHash);
-  }
-  if (isHttp(uri) || isIpfs(uri)) {
-    return await fetchTextFromUri(uri);
-  }
+  if (isMeowText(uri)) return await fetchMeowTextByHash(contentHash);
+  if (isHttp(uri) || isIpfs(uri)) return await fetchTextFromUri(uri);
   return null;
-}
-
-/**
- * Read modFlagged(id) even if your main ABI doesn't include it.
- * Falls back to a raw provider.call with a minimal Interface.
- */
-async function readModFlagged(
-  game: ethers.Contract,
-  provider: ethers.JsonRpcProvider,
-  id: bigint
-): Promise<boolean> {
-  // If ABI already has it, great—use it.
-  if (typeof (game as any).modFlagged === "function") {
-    const v: boolean = await (game as any).modFlagged(id);
-    return !!v;
-  }
-  // Raw call using a tiny ABI just for this getter
-  const iface = new ethers.Interface([
-    "function modFlagged(uint256) view returns (bool)"
-  ]);
-  const data = iface.encodeFunctionData("modFlagged", [id]);
-  const ret = await provider.call({ to: CONFIG.gameAddress as `0x${string}`, data });
-  const [flag] = iface.decodeFunctionResult("modFlagged", ret);
-  return !!flag;
 }
 
 async function main() {
   const provider = new ethers.JsonRpcProvider(CONFIG.rpcUrl, CONFIG.chainId || undefined);
+
+  // Sanity: ensure there's bytecode at the address (helps catch a wrong GAME_ADDRESS)
+  const code = await provider.getCode(CONFIG.gameAddress as `0x${string}`);
+  if (code === "0x") {
+    throw new Error(`No contract code at ${CONFIG.gameAddress} (check GAME_ADDRESS / chain)`);
+  }
+
   const wallet = new ethers.Wallet(CONFIG.privateKey, provider);
   const game = new ethers.Contract(CONFIG.gameAddress, GAME_ABI, wallet);
 
@@ -105,13 +80,6 @@ async function main() {
   const m = await game.messages(activeId);
   if (m.resolved) {
     console.log(`Message ${activeId} already resolved. Done.`);
-    return;
-  }
-
-  // If already flagged, assume contract auto-nuked on flag (your latest patch)
-  const alreadyFlagged: boolean = await readModFlagged(game, provider, activeId);
-  if (alreadyFlagged) {
-    console.log(`Message ${activeId} already mod-flagged.`);
     return;
   }
 
@@ -133,7 +101,6 @@ async function main() {
     console.log("tx sent:", tx.hash);
     const rec = await tx.wait();
     console.log("tx mined in block", rec.blockNumber);
-    // tiny cooldown to avoid racing two runs
     await sleep(CONFIG.rateLimitMs);
   } else {
     console.log(`Message ${activeId} passed moderation.`);
