@@ -1,18 +1,19 @@
 {
-  "name": "meowt-moderation-bot",
-  "version": "1.0.0",
+  "name": "hmot-keeper",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/moderate.ts",
-    "build": "tsc -p tsconfig.json || true"
+    "build": "tsc -p .",
+    "start": "node dist/keeper.js",
+    "dev": "tsx src/keeper.ts"
   },
   "dependencies": {
-    "viem": "^2.9.5",
-    "zod": "^3.23.8"
+    "viem": "^2.9.19"
   },
   "devDependencies": {
     "typescript": "^5.4.5",
+    "@types/node": "^20.11.30",
     "tsx": "^4.7.0"
   }
 }
+
