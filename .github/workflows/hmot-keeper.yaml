@@ -50,10 +50,15 @@ jobs:
       - name: Build
         run: npm run build --if-present
 
-      - name: Run keeper
-        run: |
-          if [ -f dist/keeper.js ]; then
-            node dist/keeper.js
+        - name: Run keeper
+  run: |
+    if [ -f dist/keeper.js ]; then
+      node dist/keeper.js
+    else
+      npx tsx src/keeper.ts
+    fi
+
+    
           else
             npx tsx src/moderate.ts
           fi
