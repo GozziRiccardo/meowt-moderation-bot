@@ -19,10 +19,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
+      # ---- required (use your existing secret names) ----
       RPC_URL: ${{ secrets.RPC_URL }}
-      PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
-      CONTRACT_ADDRESS: ${{ vars.CONTRACT_ADDRESS }}
-      CHAIN_ID: ${{ vars.CHAIN_ID }}
+      PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}      # <-- matches your secret
+      CONTRACT_ADDRESS: ${{ secrets.GAME_ADDRESS }}    # <-- matches your secret
+      CHAIN_ID: ${{ vars.CHAIN_ID }}                   # set repo variable (e.g. 84532 for Base Sepolia)
+      # ---- moderation API (optional) ----
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}    # used by your script if Perspective not approved
       MOD_API_URL: ${{ vars.MOD_API_URL }}
       MOD_API_KEY: ${{ secrets.MOD_API_KEY }}
       RATE_LIMIT_MS: ${{ vars.RATE_LIMIT_MS }}
@@ -34,7 +37,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
       - name: Install dependencies
         run: |
@@ -42,4 +44,15 @@ jobs:
             npm ci
           else
             npm i
+          fi
+
+      - name: Build
+        run: npm run build --if-present
+
+      - name: Run keeper
+        run: |
+          if [ -f dist/keeper.js ]; then
+            node dist/keeper.js
+          else
+            npx tsx src/moderate.ts
           fi
