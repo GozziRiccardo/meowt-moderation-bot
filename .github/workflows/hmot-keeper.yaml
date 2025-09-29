@@ -27,6 +27,7 @@ jobs:
       # ---- moderation API (optional) ----
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}    # used by your script if Perspective not approved
       MOD_API_URL: ${{ vars.MOD_API_URL }}
+      PERSPECTIVE_API_KEY: ${{ secrets.PERSPECTIVE_API_KEY }}
       MOD_API_KEY: ${{ secrets.MOD_API_KEY }}
       RATE_LIMIT_MS: ${{ vars.RATE_LIMIT_MS }}
     steps:
