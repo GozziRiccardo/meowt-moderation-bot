@@ -13,9 +13,10 @@
     "typescript": "^5.4.0"
   },
   "dependencies": {
-    // your runtime deps here (ethers, viem, etc) if any
+    viem
   }
 }
+
 
 
 
