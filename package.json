@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/moderate.ts",
-    "build": "tsc -p tsconfig.json || true" 
+    "build": "tsc -p tsconfig.json || true"
   },
   "dependencies": {
     "viem": "^2.9.5",
@@ -16,4 +16,3 @@
     "tsx": "^4.7.0"
   }
 }
-
