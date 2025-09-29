@@ -1,19 +1,21 @@
 {
-  "name": "hmot-keeper",
-  "private": true,
+  "name": "meowt-moderation-bot",
+  "version": "1.0.0",
   "type": "module",
+  "private": true,
   "scripts": {
     "build": "tsc -p .",
-    "start": "node dist/keeper.js",
-    "dev": "tsx src/keeper.ts"
-  },
-  "dependencies": {
-    "viem": "^2.9.19"
+    "start": "tsx src/keeper.ts"
   },
   "devDependencies": {
-    "typescript": "^5.4.5",
-    "@types/node": "^20.11.30",
-    "tsx": "^4.7.0"
+    "@types/node": "^20.12.12",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    // your runtime deps here (ethers, viem, etc) if any
   }
 }
+
+
 
