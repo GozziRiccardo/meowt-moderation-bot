@@ -5,46 +5,48 @@ export type ModResult = {
   flagged: boolean;
   reasons: string[];
   provider: "perspective" | "openai" | "none";
-  scores?: PerspectiveScores; // included for logging/debugging
 };
 
-const PERSPECTIVE_API_KEY = process.env.PERSPECTIVE_API_KEY ?? "";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const OPENAI_MODEL = process.env.OPENAI_MOD_MODEL ?? "omni-moderation-latest";
+const PERSPECTIVE_API_KEY = process.env.PERSPECTIVE_API_KEY || "";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const OPENAI_MODEL = process.env.OPENAI_MOD_MODEL || "omni-moderation-latest";
 
-// Order can be changed via env, e.g. "openai,perspective"
-const ORDER = (process.env.MOD_PROVIDER_ORDER ?? "perspective,openai")
+// Provider order (comma-separated env: "perspective,openai" or "openai,perspective")
+const ORDER = (process.env.MOD_PROVIDER_ORDER || "perspective,openai")
   .split(",")
   .map(s => s.trim().toLowerCase())
   .filter(Boolean) as Array<"perspective" | "openai">;
 
-// Optional single-language hint; if unset we let Perspective auto-detect.
-const PERSPECTIVE_LANG = (process.env.PERSPECTIVE_LANG ?? "").trim() || undefined;
+// Tunables for Perspective
+const PERSPECTIVE_LANG = process.env.PERSPECTIVE_LANG || "en";
+const PERSPECTIVE_THRESHOLD = Number(process.env.PERSPECTIVE_THRESHOLD || "0.83"); // toxicity
+const PERSPECTIVE_SEVERE_THRESHOLD = Number(process.env.PERSPECTIVE_SEVERE_THRESHOLD || "0.50");
 
-// --- Perspective API helper ---
+// -------------------- Perspective helpers --------------------
 
-export type PerspectiveScores = {
-  toxicity: number;
-  severe_toxicity: number;
-  insult: number;
-  threat: number;
-  identity_attack: number;
-  sexually_explicit: number;
-  profanity: number;
+type PerspectiveScores = {
+  TOXICITY: number;
+  SEVERE_TOXICITY: number;
+  INSULT: number;
+  THREAT: number;
+  IDENTITY_ATTACK: number;
+  SEXUALLY_EXPLICIT: number;
+  PROFANITY: number;
 };
 
-async function callPerspective(
+/** Call Perspective API and return normalized scores 0..1. Returns null on errors/misconfig. */
+async function getPerspectiveScores(
   text: string,
   langHint?: string
 ): Promise<PerspectiveScores | null> {
   if (!PERSPECTIVE_API_KEY) return null;
 
-  // Safety clip (Perspective supports long text, but keep it sane)
+  // Perspective accepts long inputs, but we clip to be safe
   const clipped = text.slice(0, 8000);
 
   const body = {
     comment: { text: clipped },
-    languages: langHint ? [langHint] : undefined,
+    languages: langHint ? [langHint] : [PERSPECTIVE_LANG],
     doNotStore: true,
     requestedAttributes: {
       TOXICITY: {},
@@ -65,8 +67,7 @@ async function callPerspective(
   });
 
   if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    console.warn("Perspective error:", res.status, t);
+    // Let orchestrator try the next provider
     return null;
   }
 
@@ -74,31 +75,91 @@ async function callPerspective(
   const g = (k: string) => data?.attributeScores?.[k]?.summaryScore?.value ?? 0;
 
   return {
-    toxicity: g("TOXICITY"),
-    severe_toxicity: g("SEVERE_TOXICITY"),
-    insult: g("INSULT"),
-    threat: g("THREAT"),
-    identity_attack: g("IDENTITY_ATTACK"),
-    sexually_explicit: g("SEXUALLY_EXPLICIT"),
-    profanity: g("PROFANITY"),
+    TOXICITY: g("TOXICITY"),
+    SEVERE_TOXICITY: g("SEVERE_TOXICITY"),
+    INSULT: g("INSULT"),
+    THREAT: g("THREAT"),
+    IDENTITY_ATTACK: g("IDENTITY_ATTACK"),
+    SEXUALLY_EXPLICIT: g("SEXUALLY_EXPLICIT"),
+    PROFANITY: g("PROFANITY"),
   };
 }
 
-// Thresholds (tunable via env). Defaults reflect the policy we discussed.
-const THRESH = {
-  // single-attribute hard triggers
-  severe: Number(process.env.PERSPECTIVE_SEVERE_THRESHOLD ?? "0.85"),
-  toxicity: Number(process.env.PERSPECTIVE_TOXICITY_THRESHOLD ?? "0.92"),
-  identity: Number(process.env.PERSPECTIVE_IDENTITY_THRESHOLD ?? "0.85"),
-  threat: Number(process.env.PERSPECTIVE_THREAT_THRESHOLD ?? "0.80"),
-  sexual: Number(process.env.PERSPECTIVE_SEXUAL_THRESHOLD ?? "0.92"),
-  // weighted combo trigger (fires when several are moderately high)
-  combo: Number(process.env.PERSPECTIVE_COMBO_THRESHOLD ?? "2.4"),
-};
+/** Perspective provider → ModResult */
+async function analyzeWithPerspective(text: string): Promise<ModResult> {
+  const scores = await getPerspectiveScores(text).catch(() => null);
+  if (!scores) {
+    return { flagged: false, reasons: ["perspective: unavailable"], provider: "perspective" };
+  }
 
-function perspectiveDecision(scores: PerspectiveScores): { block: boolean; reasons: string[] } {
-  const r: string[] = [];
+  const reasons: string[] = [];
+  if (scores.SEVERE_TOXICITY >= PERSPECTIVE_SEVERE_THRESHOLD) {
+    reasons.push(`SEVERE_TOXICITY=${scores.SEVERE_TOXICITY.toFixed(2)}`);
+  }
+  if (scores.TOXICITY >= PERSPECTIVE_THRESHOLD) {
+    reasons.push(`TOXICITY=${scores.TOXICITY.toFixed(2)}`);
+  }
+  if (scores.THREAT >= 0.80) reasons.push(`THREAT=${scores.THREAT.toFixed(2)}`);
+  if (scores.INSULT >= 0.90) reasons.push(`INSULT=${scores.INSULT.toFixed(2)}`);
+  if (scores.PROFANITY >= 0.95) reasons.push(`PROFANITY=${scores.PROFANITY.toFixed(2)}`);
+  if (scores.SEXUALLY_EXPLICIT >= 0.90) reasons.push(`SEXUALLY_EXPLICIT=${scores.SEXUALLY_EXPLICIT.toFixed(2)}`);
+  if (scores.IDENTITY_ATTACK >= 0.80) reasons.push(`IDENTITY_ATTACK=${scores.IDENTITY_ATTACK.toFixed(2)}`);
 
-  if (scores.severe_toxicity >= THRESH.severe) r.push(`SEVERE_TOXICITY=${scores.severe_toxicity.toFixed(2)}`);
-  if (scores.identity_attack >= THRESH.identity) r.push(`IDENTITY_ATTACK=${scores.identity_attack.toFixed(2)}`);
-  if (scores.threat >= THRESH.threat) r.push(`THREAT=${scores.threat.toFix
+  return { flagged: reasons.length > 0, reasons, provider: "perspective" };
+}
+
+// -------------------- OpenAI provider --------------------
+
+async function analyzeWithOpenAI(text: string): Promise<ModResult> {
+  if (!OPENAI_API_KEY) {
+    return { flagged: false, reasons: ["openai: no key"], provider: "openai" };
+  }
+
+  const res = await fetch("https://api.openai.com/v1/moderations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({ model: OPENAI_MODEL, input: text }),
+  }).catch(() => null);
+
+  if (!res || !res.ok) {
+    return { flagged: false, reasons: ["openai: unavailable"], provider: "openai" };
+  }
+
+  const json = await res.json().catch(() => null);
+  const r = json?.results?.[0];
+  if (!r) return { flagged: false, reasons: ["openai: empty"], provider: "openai" };
+
+  const flagged: boolean = !!r.flagged;
+  const cats = r.categories ?? {};
+  const reasons = Object.keys(cats)
+    .filter(k => cats[k])
+    .map(k => `OPENAI:${k}`);
+
+  return { flagged, reasons, provider: "openai" };
+}
+
+// -------------------- Orchestrator --------------------
+
+export async function moderateText(text: string): Promise<ModResult> {
+  for (const p of ORDER) {
+    try {
+      if (p === "perspective") {
+        const r = await analyzeWithPerspective(text);
+        if (r.reasons.includes("perspective: unavailable")) continue; // fall through
+        return r;
+      }
+      if (p === "openai") {
+        const r = await analyzeWithOpenAI(text);
+        if (r.reasons.includes("openai: no key") || r.reasons.includes("openai: unavailable")) continue;
+        return r;
+      }
+    } catch {
+      // swallow and try next provider
+    }
+  }
+  // No provider configured/available → allow
+  return { flagged: false, reasons: ["no provider configured"], provider: "none" };
+}
