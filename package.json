@@ -1,21 +1,22 @@
 {
   "name": "meowt-moderation-bot",
   "version": "1.0.0",
-  "type": "module",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "tsc -p .",
     "start": "tsx src/keeper.ts"
   },
+  "dependencies": {
+    "ethers": "^6.13.2"
+  },
   "devDependencies": {
     "@types/node": "^20.12.12",
-    "tsx": "^4.7.0",
-    "typescript": "^5.4.0"
-  },
-  "dependencies": {
-    viem
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.5"
   }
 }
+
 
 
 
