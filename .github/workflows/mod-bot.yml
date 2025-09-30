@@ -1,36 +1,44 @@
+# .github/workflows/mod-bot.yml
 name: Meowt Moderation Bot
-
 on:
-  schedule:
-    - cron: "*/1 * * * *"   # every minute
+  schedule: [ { cron: "*/1 * * * *" } ]
   workflow_dispatch: {}
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # Install deps (works whether or not you already have a package.json)
-      - name: Install dependencies
+      - name: Install deps
         run: |
           npm ci || true
           npm ls viem >/dev/null 2>&1 || npm i viem
 
-      - name: Run moderator
-        run: node bot/moderator.mjs
+      - name: Verify bot script exists
         env:
-          RPC_URL: ${{ secrets.RPC_URL }}
-          GAME_ADDRESS: ${{ secrets.GAME_ADDRESS }}
-          BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-          PERSPECTIVE_API_KEY: ${{ secrets.PERSPECTIVE_API_KEY }}
-          # Optional repo variables (Actions → Variables)
-          TOXICITY_THRESHOLD: ${{ vars.TOXICITY_THRESHOLD }}
-          INSULT_THRESHOLD:   ${{ vars.INSULT_THRESHOLD }}
-          PROFANITY_THRESHOLD: ${{ vars.PROFANITY_THRESHOLD }}
-          THREAT_THRESHOLD:   ${{ vars.THREAT_THRESHOLD }}
-          PERSPECTIVE_LANG:   ${{ vars.PERSPECTIVE_LANG }}
+          MOD_FILE: bot/moderator.mjs   # <-- change if your file lives elsewhere
+        run: |
+          echo "PWD=$(pwd)"
+          echo "Looking for $MOD_FILE"
+          if [ ! -f "$MOD_FILE" ]; then
+            echo "::error file=$MOD_FILE::Not found. Repo tree (depth 3) below:"
+            find . -maxdepth 3 -type f | sed 's|^\./||'
+            exit 1
+          fi
+
+      - name: Run moderator
+        env:
+          RPC_URL:               ${{ secrets.RPC_URL }}
+          GAME_ADDRESS:          ${{ secrets.GAME_ADDRESS }}
+          BOT_PRIVATE_KEY:       ${{ secrets.BOT_PRIVATE_KEY }}
+          PERSPECTIVE_API_KEY:   ${{ secrets.PERSPECTIVE_API_KEY }}
+          TOXICITY_THRESHOLD:    ${{ vars.TOXICITY_THRESHOLD }}
+          INSULT_THRESHOLD:      ${{ vars.INSULT_THRESHOLD }}
+          PROFANITY_THRESHOLD:   ${{ vars.PROFANITY_THRESHOLD }}
+          THREAT_THRESHOLD:      ${{ vars.THREAT_THRESHOLD }}
+          PERSPECTIVE_LANG:      ${{ vars.PERSPECTIVE_LANG }}
+        run: node bot/moderator.mjs   # <-- update this path if needed
