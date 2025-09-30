@@ -5,9 +5,8 @@
 // - Scores with Perspective
 // - If above thresholds -> calls setModerationFlag(id, true)
 // Requires env: GAME_ADDRESS, RPC_URL, BOT_PRIVATE_KEY
-// Optional env: PERSPECTIVE_API_KEY (if set, uses API key instead of ADC)
+// Auth selection: prefers ADC (GOOGLE_APPLICATION_CREDENTIALS / GCP_SA_KEY). Falls back to PERSPECTIVE_API_KEY if set and ADC not present.
 
-import { setTimeout as sleep } from 'node:timers/promises';
 import { GoogleAuth } from 'google-auth-library';
 import { createPublicClient, createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -34,7 +33,7 @@ const walletClient = createWalletClient({ chain: baseSepolia, transport: http(RP
 
 // Perspective endpoint + required OAuth scopes
 const ENDPOINT = 'https://commentanalyzer.googleapis.com/v1alpha1/comments:analyze';
-// NOTE: Perspective expects an OAuth token; userinfo.email is the key scope it checks.
+// Perspective expects an OAuth token; userinfo.email is the key scope it checks.
 // cloud-platform is fine to include and often already allowed by org policy.
 const PERSPECTIVE_SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
@@ -115,16 +114,20 @@ async function perspectiveScores(text) {
     },
   };
 
+  // Prefer ADC (service account) if present; otherwise fall back to API key if provided.
+  const preferADC = !!process.env.GOOGLE_APPLICATION_CREDENTIALS || !!process.env.GCP_SA_KEY;
+  log('Perspective auth mode:', preferADC ? 'ADC' : (PERSPECTIVE_API_KEY ? 'API_KEY' : 'ADC'));
+
   let res;
-  if (PERSPECTIVE_API_KEY) {
-    // API key path (if you ever add one; OAuth is preferred)
+  if (!preferADC && PERSPECTIVE_API_KEY) {
+    // API key path
     res = await fetch(`${ENDPOINT}?key=${PERSPECTIVE_API_KEY}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
   } else {
-    // OAuth via ADC (Service Account JSON from GCP_SA_KEY in Actions)
+    // OAuth via ADC (Service Account JSON)
     const auth = new GoogleAuth({ scopes: PERSPECTIVE_SCOPES });
     const client = await auth.getClient();
     const { token } = await client.getAccessToken();
