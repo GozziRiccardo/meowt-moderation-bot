@@ -32,8 +32,14 @@ const account = (() => {
 const publicClient = createPublicClient({ chain: baseSepolia, transport: http(RPC) });
 const walletClient = createWalletClient({ chain: baseSepolia, transport: http(RPC), account });
 
+// Perspective endpoint + required OAuth scopes
 const ENDPOINT = 'https://commentanalyzer.googleapis.com/v1alpha1/comments:analyze';
-const PERSPECTIVE_SCOPES = ['https://www.googleapis.com/auth/cloud-platform'];
+// NOTE: Perspective expects an OAuth token; userinfo.email is the key scope it checks.
+// cloud-platform is fine to include and often already allowed by org policy.
+const PERSPECTIVE_SCOPES = [
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/cloud-platform',
+];
 
 // ------- small helpers -------
 function log(...a) { console.log(...a); }
@@ -64,7 +70,7 @@ async function getTextFromUri(uri) {
       return Buffer.from(b64, 'base64').toString('utf8');
     }
 
-    // IPFS
+    // IPFS / HTTP(S)
     const toHttp = (u) =>
       u.startsWith('ipfs://')
         ? `https://ipfs.io/ipfs/${u.slice(7).replace(/^ipfs\//, '')}`
@@ -111,23 +117,32 @@ async function perspectiveScores(text) {
 
   let res;
   if (PERSPECTIVE_API_KEY) {
-    // API key path (if you ever add one)
+    // API key path (if you ever add one; OAuth is preferred)
     res = await fetch(`${ENDPOINT}?key=${PERSPECTIVE_API_KEY}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
   } else {
-    // OAuth via ADC (Service Account JSON)
+    // OAuth via ADC (Service Account JSON from GCP_SA_KEY in Actions)
     const auth = new GoogleAuth({ scopes: PERSPECTIVE_SCOPES });
     const client = await auth.getClient();
     const { token } = await client.getAccessToken();
     if (!token) throw new Error('GoogleAuth could not obtain access token.');
+
+    // (Optional) print granted scopes for debugging
+    try {
+      const ti = await client.getTokenInfo(token);
+      if (ti?.scopes) log('Perspective token scopes:', ti.scopes);
+    } catch {
+      // Some SA tokens may not support token info; safe to ignore
+    }
+
     res = await fetch(ENDPOINT, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(body),
     });
