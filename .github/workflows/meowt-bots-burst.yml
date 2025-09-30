@@ -1,0 +1,32 @@
+# .github/workflows/meowt-bots-burst.yml
+name: Meowt Bots (Burst)
+on:
+  schedule: [{ cron: "*/5 * * * *" }]
+  workflow_dispatch: {}
+
+concurrency:
+  group: meowt-bots
+  cancel-in-progress: true
+
+jobs:
+  burst:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm ci || npm i
+      - name: Burst loop (1/min for 5 minutes)
+        env:
+          RPC_URL:             ${{ secrets.RPC_URL }}
+          GAME_ADDRESS:        ${{ secrets.GAME_ADDRESS }}
+          BOT_PRIVATE_KEY:     ${{ secrets.BOT_PRIVATE_KEY }}
+          PERSPECTIVE_API_KEY: ${{ secrets.PERSPECTIVE_API_KEY }}
+          OPENAI_API_KEY:      ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          for i in $(seq 1 5); do
+            echo "🔁 iteration $i"
+            node moderator.mjs || echo "moderator failed"
+            npx tsx src/keeper.ts || echo "keeper failed"
+            if [ $i -lt 5 ]; then sleep 60; fi
+          done
