@@ -1,54 +1,49 @@
-# .github/workflows/mod-bot.yml
-name: Meowt Moderation Bot
+name: Moderation Bot
+
 on:
   schedule:
-    - cron: "*/2 * * * *"   # every 2 minutes (tweak as you like)
+    - cron: '*/5 * * * *'   # every 5 minutes
   workflow_dispatch: {}
 
+concurrency:
+  group: mod-bot
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  run-bot:
+  run:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
+          cache: 'npm'
 
-      - name: Install deps (best-effort)
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          elif [ -f package.json ]; then
-            npm i
-          fi
-          # Ensure viem present if your script imports it
-          npm ls viem >/dev/null 2>&1 || npm i viem
+      - name: Install deps
+        run: npm ci
 
-      - name: Verify bot script exists
-        env:
-          MOD_FILE: moderator.mjs   # <-- root-level path
+      # Service Account JSON -> Application Default Credentials
+      - name: Setup ADC for Google auth
         run: |
-          echo "Looking for $MOD_FILE"
-          if [ ! -f "$MOD_FILE" ]; then
-            echo "::error file=$MOD_FILE::Not found. Repo tree (depth 3) below:"
-            find . -maxdepth 3 -type f | sed 's|^\./||'
-            exit 1
-          fi
+          echo '${{ secrets.GCP_SA_KEY }}' > $HOME/gcp-sa.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-sa.json" >> $GITHUB_ENV
 
       - name: Run moderator
         env:
-          RPC_URL:             ${{ secrets.RPC_URL }}
-          GAME_ADDRESS:        ${{ secrets.GAME_ADDRESS }}
-          BOT_PRIVATE_KEY:     ${{ secrets.BOT_PRIVATE_KEY }}
+          GAME_ADDRESS: ${{ secrets.GAME_ADDRESS }}
+          RPC_URL: ${{ secrets.RPC_URL }}
+          BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
+          # Optional: if you add an API key later, keep this;
+          # otherwise ADC via service account will be used.
           PERSPECTIVE_API_KEY: ${{ secrets.PERSPECTIVE_API_KEY }}
-          OPENAI_API_KEY:      ${{ secrets.OPENAI_API_KEY }} # if your script uses it
-          # Optional configurable thresholds via repo/Org Variables:
-          TOXICITY_THRESHOLD:  ${{ vars.TOXICITY_THRESHOLD }}
-          INSULT_THRESHOLD:    ${{ vars.INSULT_THRESHOLD }}
-          PROFANITY_THRESHOLD: ${{ vars.PROFANITY_THRESHOLD }}
-          THREAT_THRESHOLD:    ${{ vars.THREAT_THRESHOLD }}
-          PERSPECTIVE_LANG:    ${{ vars.PERSPECTIVE_LANG }}
-        run: node moderator.mjs   # <-- root-level file
+        run: node moderator.mjs
