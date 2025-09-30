@@ -1,11 +1,12 @@
-# .github/workflows/meowt-bots-burst.yml
 name: Meowt Bots (Burst)
+
 on:
-  schedule: [{ cron: "*/5 * * * *" }]
+  schedule: [{ cron: "*/5 * * * *" }]  # every 5 minutes
   workflow_dispatch: {}
 
+# Give it its own group so it doesn't cancel other workflows using "meowt-bots"
 concurrency:
-  group: meowt-bots
+  group: meowt-bots-burst
   cancel-in-progress: true
 
 jobs:
@@ -13,19 +14,42 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm ci || npm i
+        with:
+          node-version: 20
+
+      - name: Install (locked if possible)
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm i
+          fi
+
+      # --- GOOGLE ADC (Service Account) setup ---
+      - name: Configure Google ADC
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          if [ -z "$GCP_SA_KEY" ]; then
+            echo "GCP_SA_KEY secret missing"; exit 1
+          fi
+          echo "$GCP_SA_KEY" > gcp-sa.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$PWD/gcp-sa.json" >> $GITHUB_ENV
+
       - name: Burst loop (1/min for 5 minutes)
         env:
-          RPC_URL:             ${{ secrets.RPC_URL }}
-          GAME_ADDRESS:        ${{ secrets.GAME_ADDRESS }}
-          BOT_PRIVATE_KEY:     ${{ secrets.BOT_PRIVATE_KEY }}
-          PERSPECTIVE_API_KEY: ${{ secrets.PERSPECTIVE_API_KEY }}
-          OPENAI_API_KEY:      ${{ secrets.OPENAI_API_KEY }}
+          RPC_URL:          ${{ secrets.RPC_URL }}
+          GAME_ADDRESS:     ${{ secrets.GAME_ADDRESS }}
+          BOT_PRIVATE_KEY:  ${{ secrets.BOT_PRIVATE_KEY }}
+          # Force ADC path by ensuring this is empty in this workflow:
+          PERSPECTIVE_API_KEY: ""
+          OPENAI_API_KEY:   ${{ secrets.OPENAI_API_KEY }}
         run: |
           for i in $(seq 1 5); do
             echo "🔁 iteration $i"
+            node -e "console.log('Auth mode for Perspective:', process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'ADC' : (process.env.PERSPECTIVE_API_KEY ? 'API_KEY' : 'ADC'))"
             node moderator.mjs || echo "moderator failed"
             npx tsx src/keeper.ts || echo "keeper failed"
             if [ $i -lt 5 ]; then sleep 60; fi
