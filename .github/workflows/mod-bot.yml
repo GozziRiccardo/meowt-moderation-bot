@@ -1,7 +1,8 @@
 # .github/workflows/mod-bot.yml
 name: Meowt Moderation Bot
 on:
-  schedule: [ { cron: "*/1 * * * *" } ]
+  schedule:
+    - cron: "*/2 * * * *"   # every 2 minutes (tweak as you like)
   workflow_dispatch: {}
 
 jobs:
@@ -9,20 +10,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install deps
+      - name: Install deps (best-effort)
         run: |
-          npm ci || true
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f package.json ]; then
+            npm i
+          fi
+          # Ensure viem present if your script imports it
           npm ls viem >/dev/null 2>&1 || npm i viem
 
       - name: Verify bot script exists
         env:
-          MOD_FILE: bot/moderator.mjs   # <-- change if your file lives elsewhere
+          MOD_FILE: moderator.mjs   # <-- root-level path
         run: |
-          echo "PWD=$(pwd)"
           echo "Looking for $MOD_FILE"
           if [ ! -f "$MOD_FILE" ]; then
             echo "::error file=$MOD_FILE::Not found. Repo tree (depth 3) below:"
@@ -32,13 +40,15 @@ jobs:
 
       - name: Run moderator
         env:
-          RPC_URL:               ${{ secrets.RPC_URL }}
-          GAME_ADDRESS:          ${{ secrets.GAME_ADDRESS }}
-          BOT_PRIVATE_KEY:       ${{ secrets.BOT_PRIVATE_KEY }}
-          PERSPECTIVE_API_KEY:   ${{ secrets.PERSPECTIVE_API_KEY }}
-          TOXICITY_THRESHOLD:    ${{ vars.TOXICITY_THRESHOLD }}
-          INSULT_THRESHOLD:      ${{ vars.INSULT_THRESHOLD }}
-          PROFANITY_THRESHOLD:   ${{ vars.PROFANITY_THRESHOLD }}
-          THREAT_THRESHOLD:      ${{ vars.THREAT_THRESHOLD }}
-          PERSPECTIVE_LANG:      ${{ vars.PERSPECTIVE_LANG }}
-        run: node bot/moderator.mjs   # <-- update this path if needed
+          RPC_URL:             ${{ secrets.RPC_URL }}
+          GAME_ADDRESS:        ${{ secrets.GAME_ADDRESS }}
+          BOT_PRIVATE_KEY:     ${{ secrets.BOT_PRIVATE_KEY }}
+          PERSPECTIVE_API_KEY: ${{ secrets.PERSPECTIVE_API_KEY }}
+          OPENAI_API_KEY:      ${{ secrets.OPENAI_API_KEY }} # if your script uses it
+          # Optional configurable thresholds via repo/Org Variables:
+          TOXICITY_THRESHOLD:  ${{ vars.TOXICITY_THRESHOLD }}
+          INSULT_THRESHOLD:    ${{ vars.INSULT_THRESHOLD }}
+          PROFANITY_THRESHOLD: ${{ vars.PROFANITY_THRESHOLD }}
+          THREAT_THRESHOLD:    ${{ vars.THREAT_THRESHOLD }}
+          PERSPECTIVE_LANG:    ${{ vars.PERSPECTIVE_LANG }}
+        run: node moderator.mjs   # <-- root-level file
