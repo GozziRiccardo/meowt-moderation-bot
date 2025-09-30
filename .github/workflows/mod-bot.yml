@@ -1,49 +1,39 @@
-name: Moderation Bot
+name: MEOWT Moderator Bot
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # every 5 minutes
-  workflow_dispatch: {}
-
-concurrency:
-  group: mod-bot
-  cancel-in-progress: true
-
-permissions:
-  contents: read
+    - cron: "*/2 * * * *"    # every 2 minutes
+  workflow_dispatch:
 
 jobs:
-  run:
+  moderate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
     steps:
-      - name: Checkout
+      - name: Check out
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
           cache: 'npm'
 
       - name: Install deps
         run: npm ci
 
-      # Service Account JSON -> Application Default Credentials
-      - name: Setup ADC for Google auth
-        run: |
-          echo '${{ secrets.GCP_SA_KEY }}' > $HOME/gcp-sa.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-sa.json" >> $GITHUB_ENV
+      - name: Verify deps
+        run: npm ls --depth=0
+
+      - name: Configure GCP creds (service account JSON)
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Run moderator
         env:
-          GAME_ADDRESS: ${{ secrets.GAME_ADDRESS }}
-          RPC_URL: ${{ secrets.RPC_URL }}
-          BOT_PRIVATE_KEY: ${{ secrets.BOT_PRIVATE_KEY }}
-          # Optional: if you add an API key later, keep this;
-          # otherwise ADC via service account will be used.
-          PERSPECTIVE_API_KEY: ${{ secrets.PERSPECTIVE_API_KEY }}
+          RPC_URL:             ${{ secrets.RPC_URL }}
+          GAME_ADDRESS:        ${{ secrets.GAME_ADDRESS }}
+          BOT_PRIVATE_KEY:     ${{ secrets.BOT_PRIVATE_KEY }}
+          # OPENAI_API_KEY (if your script uses it)
+          OPENAI_API_KEY:      ${{ secrets.OPENAI_API_KEY }}
         run: node moderator.mjs
