@@ -1,234 +1,230 @@
-// moderator.mjs — drop-in
-import { createPublicClient, createWalletClient, http, parseAbi, getAddress } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { baseSepolia } from "viem/chains";
+#!/usr/bin/env node
+// Moderator bot (Perspective via Service Account / ADC, with API-key fallback)
+// - Reads active message from GAME
+// - Extracts text (supports meow:text:, data:, ipfs://, http(s))
+// - Scores with Perspective
+// - If above thresholds -> calls setModerationFlag(id, true)
+// Requires env: GAME_ADDRESS, RPC_URL, BOT_PRIVATE_KEY
+// Optional env: PERSPECTIVE_API_KEY (if set, uses API key instead of ADC)
 
-// If you prefer your JSON ABI file:
-import gameAbiJson from "./src/abi/BillboardGame.json" assert { type: "json" };
-const GAME_ABI = (gameAbiJson.abi ?? gameAbiJson);
+import { setTimeout as sleep } from 'node:timers/promises';
+import { GoogleAuth } from 'google-auth-library';
+import { createPublicClient, createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { baseSepolia } from 'viem/chains';
+import abi from './src/abi/BillboardGame.json' with { type: 'json' };
 
-// Minimal fields used in this script must exist in the ABI:
-// - activeMessageId()
-// - messages(uint256) -> { id, author, stake, startTime, B0, uri, contentHash, likes, dislikes, feePot, resolved, nuked, ... }
-// - modFlagged(uint256) -> bool
-// - setModerationFlag(uint256,bool)
+const GAME = process.env.GAME_ADDRESS;
+const RPC  = process.env.RPC_URL;
+const PK   = process.env.BOT_PRIVATE_KEY;
+const PERSPECTIVE_API_KEY = process.env.PERSPECTIVE_API_KEY || '';
 
-const {
-  RPC_URL,
-  GAME_ADDRESS,
-  BOT_PRIVATE_KEY,
-  PERSPECTIVE_API_KEY,
-} = process.env;
-
-if (!RPC_URL || !GAME_ADDRESS || !BOT_PRIVATE_KEY || !PERSPECTIVE_API_KEY) {
-  console.error("Missing one of RPC_URL, GAME_ADDRESS, BOT_PRIVATE_KEY, PERSPECTIVE_API_KEY");
+if (!GAME || !RPC || !PK) {
+  console.error('Missing env. Need GAME_ADDRESS, RPC_URL, BOT_PRIVATE_KEY');
   process.exit(1);
 }
 
-// ---------- viem clients ----------
-const account = privateKeyToAccount(`0x${BOT_PRIVATE_KEY.replace(/^0x/, "")}`);
-const publicClient = createPublicClient({ chain: baseSepolia, transport: http(RPC_URL) });
-const walletClient = createWalletClient({ account, chain: baseSepolia, transport: http(RPC_URL) });
+const account = (() => {
+  const k = PK.startsWith('0x') ? PK : (`0x${PK}`);
+  return privateKeyToAccount(k);
+})();
 
-// ---------- URI resolvers (match dapp behavior) ----------
-const IPFS_GATEWAYS = [
-  "https://ipfs.io/ipfs/",
-  "https://cloudflare-ipfs.com/ipfs/",
-  "https://gateway.pinata.cloud/ipfs/",
-];
+const publicClient = createPublicClient({ chain: baseSepolia, transport: http(RPC) });
+const walletClient = createWalletClient({ chain: baseSepolia, transport: http(RPC), account });
 
-function looksHttp(u = "") { return u.startsWith("http://") || u.startsWith("https://"); }
+const ENDPOINT = 'https://commentanalyzer.googleapis.com/v1alpha1/comments:analyze';
+const PERSPECTIVE_SCOPES = ['https://www.googleapis.com/auth/cloud-platform'];
 
-async function fetchText(url) {
+// ------- small helpers -------
+function log(...a) { console.log(...a); }
+function err(...a) { console.error(...a); }
+
+async function fetchWithTimeout(url, opts = {}, ms = 10000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
   try {
-    const r = await fetch(url, { redirect: "follow" });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return await r.text();
-  } catch (e) {
-    throw new Error(`fetch failed: ${url} (${e?.message || e})`);
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
   }
 }
 
-async function resolveUriToText(uri = "") {
-  if (!uri) return "";
+async function getTextFromUri(uri) {
+  try {
+    if (!uri) return null;
 
-  // inline text: meow:text:<urlencoded>
-  const MEOW_PREFIX = "meow:text:";
-  if (uri.startsWith(MEOW_PREFIX)) {
-    try {
-      return decodeURIComponent(uri.slice(MEOW_PREFIX.length));
-    } catch (e) {
-      console.warn("decodeURIComponent failed for meow:text:", e?.message || e);
-      return "";
+    // Inline format: meow:text:<uriEncoded>
+    if (uri.startsWith('meow:text:')) {
+      return decodeURIComponent(uri.slice('meow:text:'.length));
     }
-  }
 
-  // data: plain base64
-  const DATA_PREFIX = "data:text/plain;base64,";
-  if (uri.startsWith(DATA_PREFIX)) {
-    try {
-      const b64 = uri.slice(DATA_PREFIX.length);
-      return Buffer.from(b64, "base64").toString("utf8");
-    } catch (e) {
-      console.warn("base64 decode failed:", e?.message || e);
-      return "";
+    // data:text/plain;base64,<...>
+    if (uri.startsWith('data:text/plain;base64,')) {
+      const b64 = uri.slice('data:text/plain;base64,'.length);
+      return Buffer.from(b64, 'base64').toString('utf8');
     }
-  }
 
-  // ipfs://... -> try a few gateways
-  if (uri.startsWith("ipfs://")) {
-    const cidPath = uri.slice("ipfs://".length).replace(/^ipfs\//, "");
-    for (const gw of IPFS_GATEWAYS) {
+    // IPFS
+    const toHttp = (u) =>
+      u.startsWith('ipfs://')
+        ? `https://ipfs.io/ipfs/${u.slice(7).replace(/^ipfs\//, '')}`
+        : u;
+
+    const candidates = uri.startsWith('ipfs://')
+      ? [
+          toHttp(uri),
+          toHttp(uri).replace('ipfs.io', 'cloudflare-ipfs.com'),
+          toHttp(uri).replace('ipfs.io', 'gateway.pinata.cloud'),
+        ]
+      : [uri];
+
+    for (const u of candidates) {
+      if (!/^https?:\/\//i.test(u)) continue;
       try {
-        const text = await fetchText(gw + cidPath);
-        if (text) return text;
-      } catch { /* try next */ }
+        const r = await fetchWithTimeout(u, {}, 10000);
+        if (!r.ok) continue;
+        const text = await r.text();
+        if (text && text.trim()) {
+          // keep it reasonable for Perspective
+          return text.slice(0, 8000);
+        }
+      } catch {}
     }
-    console.warn("All IPFS gateways failed for", uri);
-    return "";
-  }
-
-  // http(s)://...
-  if (looksHttp(uri)) {
-    try {
-      return await fetchText(uri);
-    } catch (e) {
-      console.warn("HTTP fetch failed:", e?.message || e);
-      return "";
-    }
-  }
-
-  // Unknown scheme
-  return "";
+  } catch {}
+  return null;
 }
 
-// ---------- Perspective ----------
 async function perspectiveScores(text) {
-  const url = `https://commentanalyzer.googleapis.com/v1alpha1/comments:analyze?key=${encodeURIComponent(PERSPECTIVE_API_KEY)}`;
   const body = {
     comment: { text },
-    languages: ["en"],
-    requestedAttributes: {
-      TOXICITY: {}, SEVERE_TOXICITY: {}, INSULT: {}, PROFANITY: {},
-      // add other attributes if you like
-    },
     doNotStore: true,
+    languages: ['en'],
+    requestedAttributes: {
+      TOXICITY: {},
+      INSULT: {},
+      THREAT: {},
+      SEXUALLY_EXPLICIT: {},
+      PROFANITY: {},
+      IDENTITY_ATTACK: {},
+    },
   };
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) {
-    const t = await r.text().catch(() => "");
-    throw new Error(`Perspective error ${r.status}: ${t}`);
+
+  let res;
+  if (PERSPECTIVE_API_KEY) {
+    // API key path (if you ever add one)
+    res = await fetch(`${ENDPOINT}?key=${PERSPECTIVE_API_KEY}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } else {
+    // OAuth via ADC (Service Account JSON)
+    const auth = new GoogleAuth({ scopes: PERSPECTIVE_SCOPES });
+    const client = await auth.getClient();
+    const { token } = await client.getAccessToken();
+    if (!token) throw new Error('GoogleAuth could not obtain access token.');
+    res = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
   }
-  const json = await r.json();
-  const g = (name) => json.attributeScores?.[name]?.summaryScore?.value ?? 0;
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(`Perspective error ${res.status}: ${JSON.stringify(json, null, 2)}`);
+  }
+
+  const attr = json.attributeScores || {};
+  const take = (k) => Number(attr?.[k]?.summaryScore?.value ?? 0);
   return {
-    TOXICITY: g("TOXICITY"),
-    SEVERE_TOXICITY: g("SEVERE_TOXICITY"),
-    INSULT: g("INSULT"),
-    PROFANITY: g("PROFANITY"),
+    TOXICITY: take('TOXICITY'),
+    INSULT: take('INSULT'),
+    THREAT: take('THREAT'),
+    SEXUALLY_EXPLICIT: take('SEXUALLY_EXPLICIT'),
+    PROFANITY: take('PROFANITY'),
+    IDENTITY_ATTACK: take('IDENTITY_ATTACK'),
   };
 }
 
-// simple policy thresholds (tune as you like)
-const THRESH = {
-  TOXICITY:        0.85,
-  SEVERE_TOXICITY: 0.70,
-  INSULT:          0.80,
-  PROFANITY:       0.80,
-};
-
-function violates(scores) {
+function shouldFlag(scores) {
+  const s = scores || {};
   return (
-    scores.SEVERE_TOXICITY >= THRESH.SEVERE_TOXICITY ||
-    scores.TOXICITY        >= THRESH.TOXICITY ||
-    scores.INSULT          >= THRESH.INSULT ||
-    scores.PROFANITY       >= THRESH.PROFANITY
+    (s.TOXICITY ?? 0) >= 0.85 ||
+    (s.INSULT ?? 0) >= 0.80 ||
+    (s.THREAT ?? 0) >= 0.70 ||
+    (s.SEXUALLY_EXPLICIT ?? 0) >= 0.90 ||
+    (s.PROFANITY ?? 0) >= 0.80 ||
+    (s.IDENTITY_ATTACK ?? 0) >= 0.75
   );
 }
 
-// ---------- contract helpers ----------
-async function readActiveAndMessage() {
+async function main() {
+  // 1) find active id
   const id = await publicClient.readContract({
-    address: getAddress(GAME_ADDRESS),
-    abi: GAME_ABI,
-    functionName: "activeMessageId",
+    address: GAME,
+    abi,
+    functionName: 'activeMessageId',
     args: [],
   });
-  const idBig = BigInt(id || 0n);
-  if (idBig === 0n) return { id: 0n, msg: null };
 
-  const msg = await publicClient.readContract({
-    address: getAddress(GAME_ADDRESS),
-    abi: GAME_ABI,
-    functionName: "messages",
-    args: [idBig],
-  });
-  return { id: idBig, msg };
-}
-
-async function alreadyFlagged(id) {
-  try {
-    return await publicClient.readContract({
-      address: getAddress(GAME_ADDRESS),
-      abi: GAME_ABI,
-      functionName: "modFlagged",
-      args: [id],
-    });
-  } catch {
-    return false;
+  log('activeMessageId =', String(id));
+  if (!id || id === 0n) {
+    log('No active message. Exiting.');
+    return;
   }
-}
 
-async function setFlag(id, flagged) {
+  // 2) read message + mod state
+  const [msg, flagged] = await Promise.all([
+    publicClient.readContract({ address: GAME, abi, functionName: 'messages', args: [id] }),
+    publicClient.readContract({ address: GAME, abi, functionName: 'modFlagged', args: [id] }),
+  ]);
+
+  const resolved = Boolean(msg?.resolved ?? msg?.[10]);
+  const uri      = (msg?.uri ?? msg?.[5] ?? '').toString();
+
+  if (resolved) { log('Already resolved — nothing to do.'); return; }
+  if (flagged)  { log('Already flagged — nothing to do.'); return; }
+
+  // 3) extract text
+  const text = await getTextFromUri(uri);
+  if (!text || !text.trim()) {
+    log(`no retrievable text for URI=${uri}. Skipping.`);
+    return;
+  }
+  log('Sample text (first 120):', JSON.stringify(text.slice(0, 120)));
+
+  // 4) score
+  const scores = await perspectiveScores(text);
+  log('Scores:', scores);
+
+  // 5) decide + flag
+  if (!shouldFlag(scores)) {
+    log('Below thresholds — not flagging.');
+    return;
+  }
+
+  log('Above thresholds — flagging...');
   const hash = await walletClient.writeContract({
-    address: getAddress(GAME_ADDRESS),
-    abi: GAME_ABI,
-    functionName: "setModerationFlag",
-    args: [id, flagged],
+    address: GAME,
+    abi,
+    functionName: 'setModerationFlag',
+    args: [id, true],
     account,
   });
-  console.log("setModerationFlag tx:", hash);
-  // wait is optional; contract auto-resolves active posts when flagged = true
-  await publicClient.waitForTransactionReceipt({ hash });
-  return hash;
+
+  log('tx sent:', hash);
+  const r = await publicClient.waitForTransactionReceipt({ hash });
+  if (r.status !== 'success') {
+    throw new Error('Flag tx reverted.');
+  }
+  log('Moderation flag confirmed ✅');
 }
 
-// ---------- main ----------
-(async () => {
-  try {
-    const { id, msg } = await readActiveAndMessage();
-    console.log("activeMessageId =", id.toString());
-    if (!id || id === 0n || !msg) {
-      console.log("No active message. Done.");
-      return;
-    }
-
-    const uri = (msg.uri ?? msg[5] ?? "").toString();
-    const text = (await resolveUriToText(uri)).trim();
-
-    if (!text) {
-      console.log(`no retrievable text for URI=${uri}. Skipping.`);
-      return;
-    }
-
-    console.log("Sample text (first 120):", JSON.stringify(text.slice(0, 120)));
-
-    const scores = await perspectiveScores(text);
-    console.log("Perspective scores:", scores);
-
-    if (!(await alreadyFlagged(id)) && violates(scores)) {
-      console.log("❗Violates thresholds. Flagging…");
-      await setFlag(id, true);
-      console.log("✅ Flagged & (if active) auto-nuked.");
-    } else {
-      console.log("No action needed.");
-    }
-  } catch (e) {
-    console.error("Moderator failed:", e?.stack || e?.message || e);
-    process.exitCode = 1;
-  }
-})();
+main().catch((e) => {
+  err('Moderator failed:', e);
+  process.exit(1);
+});
