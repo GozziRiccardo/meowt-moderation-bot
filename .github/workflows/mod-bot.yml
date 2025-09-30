@@ -31,6 +31,6 @@ jobs:
           # Optional repo variables (Actions → Variables)
           TOXICITY_THRESHOLD: ${{ vars.TOXICITY_THRESHOLD }}
           INSULT_THRESHOLD:   ${{ vars.INSULT_THRESHOLD }}
-          PROFANITY_THRESHOLD:${{ vars.PROFANITY_THRESHOLD }}
+          PROFANITY_THRESHOLD: ${{ vars.PROFANITY_THRESHOLD }}
           THREAT_THRESHOLD:   ${{ vars.THREAT_THRESHOLD }}
           PERSPECTIVE_LANG:   ${{ vars.PERSPECTIVE_LANG }}
