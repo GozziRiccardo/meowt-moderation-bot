@@ -2,6 +2,21 @@ import { ethers } from "ethers";
 import { GAME_ABI } from "./abi.js";
 import { CONFIG } from "./config.js";
 import { moderateText } from "./moderate.js";
+import { JsonRpcProvider, WebSocketProvider, Wallet } from 'ethers';
+
+const RPC = process.env.RPC_URL!;
+const provider =
+  RPC.startsWith('wss')
+    ? new WebSocketProvider(RPC)
+    : new JsonRpcProvider(RPC);
+
+// (optional) sanity
+const net = await provider.getNetwork();
+if (process.env.CHAIN_ID && BigInt(process.env.CHAIN_ID) !== net.chainId) {
+  throw new Error(`RPC chainId ${net.chainId} != expected ${process.env.CHAIN_ID}`);
+}
+
+const wallet = new Wallet(process.env.BOT_PRIVATE_KEY!, provider);
 
 // Small helpers
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
