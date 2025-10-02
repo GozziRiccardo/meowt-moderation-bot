@@ -46,6 +46,7 @@ jobs:
           # Force ADC path by ensuring this is empty in this workflow:
           PERSPECTIVE_API_KEY: ""
           OPENAI_API_KEY:   ${{ secrets.OPENAI_API_KEY }}
+          CHAIN_ID:         ${{ vars.CHAIN_ID }}
         run: |
           for i in $(seq 1 5); do
             echo "🔁 iteration $i"
